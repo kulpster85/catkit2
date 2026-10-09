@@ -1,0 +1,58 @@
+@startuml sequence_datastream
+title DataStream frame submission and retrieval (shared memory)
+
+skinparam shadowing false
+
+participant "Producer\n(e.g. CameraService\nacquisition loop)" as Prod
+participant "DataStream\n(producer side)" as DS1
+participant "SharedMemory\n(header + ring buffer)" as SHM
+participant "Event\n(futex / condvar /\nsemaphore / spinlock)" as Ev
+participant "DataStream\n(consumer side)" as DS2
+participant "Consumer\n(e.g. CameraProxy.\ntake_raw_exposures)" as Cons
+
+== Setup ==
+Prod -> DS1 : MakeDataStream("images",\ndtype, shape, num_frames)
+DS1 -> SHM : Create(stream_id, header +\nnum_frames * frame_size)
+DS1 -> Ev : Create(shared event)
+
+Cons -> DS2 : GetDataStream("images")
+DS2 -> SHM : Open(stream_id)\n(map same memory)
+DS2 -> Ev : Open(same event)
+
+== Produce a frame ==
+loop acquisition loop
+    Prod -> DS1 : RequestNewFrame()
+    DS1 -> SHM : reserve slot\n(next_request_id % num_frames)
+    DS1 --> Prod : DataFrame (view into buffer)
+    Prod -> SHM : write pixel data\n(C-contiguous, matching dtype/shape)
+    Prod -> DS1 : SubmitFrame(frame.id)
+    DS1 -> SHM : atomically update\nm_LastId, timestamp
+    DS1 -> Ev : Signal()
+end
+
+== Consume frames ==
+Cons -> DS2 : GetNextFrame(timeout_ms)
+alt frame already available
+    DS2 -> SHM : check m_FirstId <= id <= m_LastId
+    DS2 --> Cons : DataFrame (zero-copy view)
+else frame not yet submitted
+    DS2 -> Ev : Wait(timeout_ms,\ncondition = IsFrameAvailable(id))
+    Ev --> DS2 : woken by producer Signal()
+    DS2 --> Cons : DataFrame
+end
+Cons -> Cons : frame.data.copy()\n(copy before next overwrite\nif data is kept)
+
+note over SHM
+  Ring buffer semantics: frame ids increase
+  monotonically; slot = id % num_frames.
+  Old frames are overwritten, so consumers
+  must copy data they want to keep.
+end note
+
+note over DS2, Cons
+  GetLatestFrame() returns the newest frame
+  without waiting. Waits are specified
+  in milliseconds in the Python API.
+end note
+
+@enduml

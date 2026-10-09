@@ -1,0 +1,56 @@
+@startuml sequence_experiment
+title Experiment lifecycle (catkit2.testbed.experiment.Experiment)
+
+skinparam shadowing false
+
+actor User
+participant "Experiment" as Exp
+participant "TestbedProxy" as TBP
+participant "CatkitLogHandler /\nLogForwarder" as LogFwd
+participant "LogWriter" as LW
+participant "LogTerminal" as LT
+participant "Services\n(via ServiceProxy)" as Svcs
+
+User -> Exp : run()
+activate Exp
+
+Exp -> Exp : append self to\n_running_experiments
+Exp -> Exp : _compute_output_path()\n(from config templates,\nexperiment depth, date)
+Exp -> Exp : write metadata.asdf
+Exp -> TBP : read config
+Exp -> Exp : write config.yml
+
+alt first (base) experiment only
+    Exp -> LogFwd : install log handler,\nconnect to testbed\nlogging ingress port
+    Exp -> LW : start()\n(subscribe to logging egress)
+    Exp -> LT : start()\n(print log messages)
+end
+
+Exp -> LW : output_to(output_path/experiment.log)
+activate LW
+
+Exp -> Exp : pre_experiment()
+note right : Hook: hardware setup,\ntaking reference data.
+
+Exp -> Svcs : experiment()\n(user experiment code:\nget_service, commands,\nproperties, data streams)
+note right : Main experiment logic,\ncan run nested\nsub-experiments.
+
+Exp -> Exp : post_experiment()
+note right : Success-path hook only;\nnot guaranteed cleanup\non failure.
+
+deactivate LW
+
+Exp -> LT : stop()
+Exp -> LW : stop()
+Exp -> LogFwd : remove handler
+Exp -> Exp : pop from\n_running_experiments
+deactivate Exp
+Exp --> User : done
+
+note over Exp
+  Exceptions in pre_experiment / experiment /
+  post_experiment are logged as critical and
+  re-raised; the finally block tears down logging.
+end note
+
+@enduml

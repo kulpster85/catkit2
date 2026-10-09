@@ -1,0 +1,287 @@
+@startuml cpp_core_classes
+title catkit_core - C++ class diagram
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+package "Service framework" {
+    class Service {
+        -m_ServiceId : string
+        -m_ServiceType : string
+        -m_IsRunning : atomic_bool
+        -m_ShouldShutDown : atomic_bool
+        -m_Testbed : shared_ptr<TestbedProxy>
+        -m_Heartbeat : shared_ptr<DataStream>
+        -m_Safety : shared_ptr<DataStream>
+        -m_State : shared_ptr<DataStream>
+        -m_Properties : map<string, pair<PropertyGetter, PropertySetter>>
+        -m_Commands : map<string, shared_ptr<Command>>
+        -m_DataStreams : map<string, shared_ptr<DataStream>>
+        +Service(service_type, service_id, service_port, testbed_port)
+        +Run(error_check)
+        +{abstract} Open()
+        +{abstract} Main()
+        +{abstract} Close()
+        +ShutDown()
+        +MakeProperty(name, getter, setter)
+        +MakeCommand(name, func)
+        +MakeDataStream(name, type, dims, num_frames)
+        +GetTestbed() : shared_ptr<TestbedProxy>
+        -MonitorSafety()
+        -MonitorHeartbeats()
+        -UpdateState(state)
+        -HandleSetPropertyMessage(broker, message)
+        -HandleExecuteCommandMessage(broker, message)
+    }
+
+    class DeformableMirrorService {
+    }
+
+    class Command {
+        -m_Name : string
+        -m_CommandFunction : CommandFunction
+        +Execute(arguments : Dict) : Value
+    }
+
+    class ServiceProxy {
+        -m_Testbed : shared_ptr<TestbedProxy>
+        -m_ServiceId : string
+        -m_Client : shared_ptr<Client>
+        -m_PropertyNames : vector<string>
+        -m_CommandNames : vector<string>
+        -m_DataStreams : map<string, shared_ptr<DataStream>>
+        -m_Heartbeat : shared_ptr<DataStream>
+        -m_State : shared_ptr<DataStream>
+        +GetProperty(name) : Value
+        +SetProperty(name, value) : Value
+        +ExecuteCommand(name, arguments) : Value
+        +GetDataStream(name) : shared_ptr<DataStream>
+        +Start(timeout)
+        +Stop() / Interrupt() / Terminate()
+        -Connect()
+    }
+
+    class TestbedProxy {
+        -m_Host : string
+        -m_Port : int
+        +GetService(service_id) : shared_ptr<ServiceProxy>
+        +StartService(service_id)
+        +StopService(service_id)
+        +RegisterService(id, type, host, port, pid, heartbeat_id)
+        +GetServiceInfo(service_id) : ServiceReference
+        +GetConfig()
+        +GetHeartbeat() : shared_ptr<DataStream>
+        +GetMessageBroker() : shared_ptr<MessageBroker>
+        +ShutDown()
+    }
+
+    class ServiceState <<enum>> {
+        CLOSED
+        INITIALIZING
+        OPENING
+        RUNNING
+        CLOSING
+        UNRESPONSIVE
+        CRASHED
+        FAIL_SAFE
+    }
+}
+
+package "Networking (ZeroMQ)" {
+    class Server {
+        -m_Port : int
+        -m_RequestHandlers : map<string, RequestHandler>
+        +RegisterRequestHandler(type, handler)
+        +Start()
+        +Stop()
+    }
+
+    class Client {
+        -m_Host : string
+        -m_Port : int
+        -m_Sockets : socket pool
+        +MakeRequest(what, request) : string
+    }
+}
+
+package "Data transport (shared memory)" {
+    abstract class Shareable {
+        +GetId() : string
+        +{abstract} Serialize(stream)
+        +{abstract} Deserialize(stream)
+    }
+
+    abstract class Memory {
+        +GetAddress() : void*
+        +GetSize() : size_t
+    }
+
+    class SharedMemory {
+        +{static} Create(id, num_bytes)
+        +{static} Open(id)
+    }
+
+    class LocalMemory
+    class CudaSharedMemory
+
+    class Tensor {
+        -m_Dimensions
+        -m_DataType
+        -m_Data : char*
+        -m_IsOwner : bool
+        +GetData() : char*
+        +GetNumElements() : size_t
+    }
+
+    class DataFrame {
+        +m_Id : size_t
+        +m_TimeStamp : uint64_t
+    }
+
+    class DataStream {
+        -m_Header : DataStreamHeader*
+        -m_SharedMemory : shared_ptr<SharedMemory>
+        -m_Event : shared_ptr<Event>
+        +{static} Create(name, service_id, type, dims, num_frames)
+        +{static} Open(stream_id)
+        +RequestNewFrame() : DataFrame
+        +SubmitFrame(id)
+        +SubmitData(data)
+        +GetFrame(id, wait_ms) : DataFrame
+        +GetNextFrame(wait_ms) : DataFrame
+        +GetLatestFrame() : DataFrame
+        +IsFrameAvailable(id) : bool
+    }
+
+    class DataStreamHeader <<struct>> {
+        +m_FirstId : atomic_size_t
+        +m_LastId : atomic_size_t
+        +m_NextRequestId : atomic_size_t
+        +m_FrameMetadata[]
+    }
+}
+
+package "Synchronization" {
+    class Event {
+        +Signal()
+        +Wait(timeout_ms, condition, method)
+    }
+
+    class EventImpl <<template>> {
+    }
+
+    class "EventFutex | EventConditionVariable |\nEventSemaphore | EventSpinLock" as EventImpls
+}
+
+package "Messaging" {
+    abstract class MessageBroker {
+        +PublishData(topic, data)
+        +Subscribe(topic) : MessageSubscription
+    }
+
+    class LocalMessageBroker {
+        -topic headers : HashMap
+        -payload allocators : HybridPoolAllocator
+    }
+
+    class Message
+    class MessageSubscription {
+        +GetNextMessage(timeout) : Message
+    }
+}
+
+package "Allocators / containers" {
+    class BuddyAllocator
+    class PoolAllocator
+    class HybridPoolAllocator
+    class HashMap
+}
+
+package "Logging & tracing" {
+    class LogListener {
+        +{abstract} AddLogEntry(entry)
+    }
+    class LogConsole
+    class LogFile
+    class LogForwarder {
+        +Connect(service_id, host)
+    }
+    class TracingProxy {
+        +Connect(process_name, host, port)
+        +TraceInterval(name, category, start, duration)
+        +TraceInstant(name, timestamp)
+        +TraceCounter(name, series, timestamp, value)
+    }
+}
+
+package "Types" {
+    class Value <<variant>> {
+        NoneValue | bool | int | double |
+        string | Dict | List | Tensor
+    }
+    class Dict
+    class List
+    class DataType <<enum>>
+}
+
+' Inheritance
+Service <|-- DeformableMirrorService
+Client <|-- TestbedProxy
+Shareable <|-- DataStream
+Shareable <|-- SharedMemory
+Shareable <|-- LocalMemory
+Shareable <|-- Event
+Shareable <|-- HashMap
+Shareable <|-- BuddyAllocator
+Shareable <|-- PoolAllocator
+Shareable <|-- HybridPoolAllocator
+Shareable <|-- LocalMessageBroker
+Memory <|-- SharedMemory
+Memory <|-- LocalMemory
+Memory <|-- CudaSharedMemory
+Tensor <|-- DataFrame
+MessageBroker <|-- LocalMessageBroker
+LogListener <|-- LogConsole
+LogListener <|-- LogFile
+LogListener <|-- LogForwarder
+EventImpl <|-- EventImpls
+Event o-- EventImpl
+
+' Composition / association
+Service *-- Server : request handling
+Service *-- "many" Command
+Service *-- "many" DataStream : heartbeat, state,\nsafety, user streams
+Service o-- TestbedProxy
+Service ..> ServiceState : publishes on\nstate stream
+ServiceProxy *-- Client : RPC to service
+ServiceProxy o-- TestbedProxy
+ServiceProxy o-- "many" DataStream : opened by id
+TestbedProxy ..> ServiceProxy : service discovery
+TestbedProxy o-- MessageBroker
+DataStream *-- SharedMemory : header + ring buffer
+DataStream *-- Event : frame notification
+DataStream ..> DataStreamHeader
+DataStream ..> DataFrame : produces
+LocalMessageBroker *-- HashMap
+LocalMessageBroker *-- HybridPoolAllocator
+MessageBroker ..> Message
+MessageBroker ..> MessageSubscription
+Command ..> Value
+Command ..> Dict
+Tensor ..> DataType
+
+note bottom of DataStream
+  Ring buffer in shared memory.
+  Producer: RequestNewFrame -> write -> SubmitFrame.
+  Consumers wait on the shared Event
+  (futex / condition variable / semaphore / spinlock).
+end note
+
+note bottom of Service
+  Run() drives the lifecycle:
+  INITIALIZING -> OPENING (Open) ->
+  RUNNING (Main) -> CLOSING (Close) -> CLOSED.
+  Failures transition to CRASHED or FAIL_SAFE.
+end note
+
+@enduml

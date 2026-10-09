@@ -1,0 +1,67 @@
+@startuml sequence_command_property
+title Property access and command execution (ServiceProxy -> Service)
+
+skinparam shadowing false
+
+actor "User code" as User
+participant "ServiceProxy\n(Python)" as PyProxy
+participant "ServiceProxy\n(C++)" as Proxy
+participant "Client\n(ZMQ REQ)" as Client
+participant "Server\n(ZMQ REP)" as Server
+participant "Service\n(C++)" as Svc
+participant "User service code\n(Python getter/setter/command)" as PySvc
+
+== Get property ==
+User -> PyProxy : camera.exposure_time
+PyProxy -> PyProxy : __getattr__ finds name\nin property_names
+PyProxy -> Proxy : GetProperty("exposure_time")
+Proxy -> Client : MakeRequest("get_property", request)
+Client -> Server : ZMQ request [type, data]
+Server -> Svc : dispatch to registered handler
+Svc -> Svc : lookup m_Properties["exposure_time"]
+Svc -> PySvc : invoke PropertyGetter
+PySvc --> Svc : value
+Svc --> Server : serialized Value (protobuf)
+Server --> Client : ZMQ reply
+Client --> Proxy : response
+Proxy --> PyProxy : Value -> Python object
+PyProxy --> User : 0.01
+
+== Set property ==
+User -> PyProxy : camera.exposure_time = 0.02
+PyProxy -> PyProxy : __setattr__ finds name\nin property_names
+PyProxy -> Proxy : SetProperty("exposure_time", value)
+Proxy -> Client : MakeRequest("set_property", request)
+Client -> Server : ZMQ request
+Server -> Svc : dispatch
+Svc -> PySvc : invoke PropertySetter(value)
+PySvc --> Svc : (new value)
+Svc --> Server : reply
+Server --> Client : ZMQ reply
+Client --> Proxy : response
+Proxy --> PyProxy : done
+
+== Execute command ==
+User -> PyProxy : dm.apply_shape(channel, shape)\nor proxy.some_command(a=1)
+PyProxy -> PyProxy : __getattr__ finds name\nin command_names
+PyProxy -> Proxy : ExecuteCommand("some_command", {a: 1})
+Proxy -> Client : MakeRequest("execute_command", request)
+Client -> Server : ZMQ request
+Server -> Svc : dispatch
+Svc -> Svc : lookup m_Commands["some_command"]
+Svc -> PySvc : Command::Execute(arguments)
+PySvc --> Svc : result Value
+Svc --> Server : serialized result
+Server --> Client : ZMQ reply
+Client --> Proxy : response
+Proxy --> PyProxy : result -> Python object
+PyProxy --> User : result
+
+note over Svc, PySvc
+  Properties and commands are registered in Open()
+  with make_property() / make_command().
+  Handlers must stay responsive; long-running work
+  belongs in Main() or a worker thread.
+end note
+
+@enduml

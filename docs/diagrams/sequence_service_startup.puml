@@ -1,0 +1,54 @@
+@startuml sequence_service_startup
+title Service startup and registration
+
+skinparam shadowing false
+
+actor "User / Experiment" as User
+participant "TestbedProxy\n(client process)" as TBP
+participant "Testbed\n(server process)" as TB
+participant "ServiceReference" as Ref
+participant "Service process\n(Python subprocess)" as Proc
+participant "Service\n(catkit_core)" as Svc
+
+User -> TBP : get_service("camera1")
+TBP -> TB : GetServiceInfo("camera1")
+TB --> TBP : state = CLOSED
+TBP -> TB : StartService("camera1")
+
+TB -> TB : resolve service_type\n(simulated or hardware)
+TB -> TB : get_unused_port()
+TB -> Proc : subprocess.Popen(python service.py\n--id --port --testbed_port)
+TB -> Ref : state = INITIALIZING
+
+Proc -> Svc : Service(service_type, service_id,\nservice_port, testbed_port)
+Svc -> Svc : create heartbeat, state,\nsafety DataStreams
+Svc -> TBP : TestbedProxy(host, testbed_port)
+Svc -> TB : RegisterService(id, type, host,\nport, pid, heartbeat_stream_id)
+TB -> Ref : store host/port/heartbeat
+TB --> Svc : testbed config
+
+Proc -> Svc : run()
+Svc -> Svc : UpdateState(OPENING)
+Svc -> Svc : Open()\n(connect to hardware,\nmake properties/commands/streams)
+Svc -> Svc : UpdateState(RUNNING)
+Svc -> Svc : Main()\n(service main loop until\nshould_shut_down)
+
+loop while service runs
+    TBP -> TB : GetServiceInfo("camera1")
+    TB --> TBP : state stream id
+    TBP -> TBP : wait until state == RUNNING
+end
+
+TBP -> Svc : Connect()\n(fetch property / command /\ndata stream names)
+TBP --> User : ServiceProxy\n(interface class from\ncatkit2.proxies entry point)
+
+== Shutdown ==
+User -> TBP : stop_service("camera1")
+TBP -> TB : StopService("camera1")
+TB -> Svc : ShutDown request
+Svc -> Svc : Main() returns,\nUpdateState(CLOSING)
+Svc -> Svc : Close()
+Svc -> Svc : UpdateState(CLOSED)
+TB -> Ref : monitor_services()\ndetects process exit
+
+@enduml

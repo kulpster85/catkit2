@@ -1,0 +1,300 @@
+@startuml python_classes
+title catkit2 - Python class diagram (package catkit2)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+package "catkit_bindings (C++ via pybind11)" <<Frame>> {
+    class "catkit_bindings.Service" as BindingsService
+    class "catkit_bindings.ServiceProxy" as BindingsServiceProxy
+    class "catkit_bindings.TestbedProxy" as BindingsTestbedProxy
+    class "catkit_bindings.DataStream" as BindingsDataStream
+    class "catkit_bindings.LogForwarder" as BindingsLogForwarder
+}
+
+package "catkit2.testbed" {
+    class Service {
+        +log : Logger
+        -_testbed : TestbedProxy
+        -_log_handler : CatkitLogHandler
+        +__init__(service_type, **kwargs)
+        +testbed : TestbedProxy
+        .. inherited from bindings ..
+        +run()
+        +open()
+        +main()
+        +close()
+        +make_property(name, getter, setter)
+        +make_command(name, func)
+        +make_data_stream(name, dtype, shape, num_frames)
+        +should_shut_down : bool
+    }
+
+    class ServiceProxy {
+        {static} -_service_interfaces : dict
+        -_testbed : TestbedProxy
+        +__init__(testbed, service_id)
+        +testbed : TestbedProxy
+        +__getattr__(name)
+        +__setattr__(name, value)
+        {static} +get_service_interface(interface_name)
+        .. inherited from bindings ..
+        +get_property(name)
+        +set_property(name, value)
+        +execute_command(name, args)
+        +get_data_stream(name)
+        +property_names
+        +command_names
+        +data_stream_names
+    }
+
+    class TestbedProxy {
+        +__init__(host, port)
+        +get_service(service_id) : ServiceProxy
+        +__getattr__(item) : ServiceProxy
+        .. inherited from bindings ..
+        +start_service(service_id)
+        +stop_service(service_id)
+        +config
+        +host
+        +port
+    }
+
+    class Testbed {
+        +port : int
+        +is_simulated : bool
+        +config : dict
+        +services : dict[str, ServiceReference]
+        +log_distributor : ZmqDistributor
+        +tracing_distributor : ZmqDistributor
+        +__init__(port, is_simulated, config)
+        +run()
+        +start_service(service_id)
+        +stop_service(service_id)
+        +interrupt_service(service_id)
+        +terminate_service(service_id)
+        +monitor_services()
+        +do_heartbeats()
+        +shut_down_all_services()
+        +on_register_service(data)
+        +on_start_service(data)
+        +on_get_info(data)
+        +reload_config(new_config)
+    }
+
+    class ServiceReference {
+        +service_id : str
+        +service_type : str
+        +state : ServiceState
+        +dependencies : list
+        +requires_safety : bool
+        +process_id : int
+        +port : int
+        +is_alive : bool
+        +stop()
+        +interrupt()
+        +terminate()
+    }
+
+    class Experiment {
+        +name : str
+        +testbed : TestbedProxy
+        +metadata : dict
+        +is_base_experiment : bool
+        +output_path : str
+        {static} -_running_experiments : list
+        +__init__(testbed, metadata, is_base_experiment)
+        +run()
+        #pre_experiment()
+        #experiment()
+        #post_experiment()
+        -_compute_output_path()
+    }
+
+    class CatkitLogHandler {
+        +emit(record)
+    }
+
+    class LogObserver {
+        +host : str
+        +port : int
+        +start()
+        +stop()
+        +loop()
+        #handle_message(log_message)
+    }
+
+    class LogWriter {
+        +output_filename : str
+        +output_to(output_filename)
+        #handle_message(log_message)
+    }
+
+    class LogTerminal {
+        #handle_message(log_message)
+    }
+
+    class TraceWriter {
+        +open(filename)
+        +close()
+        -_loop()
+    }
+
+    class ZmqDistributor {
+        +input_port : int
+        +output_port : int
+        +start()
+        +stop()
+        -_forwarder()
+    }
+}
+
+package "catkit2.testbed.proxies" {
+    class CameraProxy {
+        +take_raw_exposures(num_exposures)
+        +take_exposures() <<deprecated>>
+    }
+
+    class DeformableMirrorProxy {
+        +device_actuator_mask
+        +command_length
+        +dm_shape
+        +num_dms
+        +num_actuators
+        +actuator_grid
+        +flatten_channels(channel_names)
+        +dm_maps_to_command(dm_map)
+        +command_to_dm_maps(command)
+        +apply_shape(channel, dm_shape)
+        +write_dm_shape(fname, dm_shape)
+    }
+
+    class "FlipMountProxy, NewportXpsQ8Proxy, NiDaqProxy, ..." as OtherProxies
+}
+
+package "catkit2.base_services" {
+    class CameraService {
+        +open()
+        +main()
+        +close()
+        +acquisition_loop()
+        +monitor_temperature()
+        +rot_flip_image(img)
+        #start_acquisition() <<abstract>>
+        #end_acquisition() <<abstract>>
+        #capture_image() <<abstract>>
+        +exposure_time
+        +gain
+        +width / height
+        +offset_x / offset_y
+    }
+
+    class StoppedAcquisition {
+        +__enter__()
+        +__exit__()
+    }
+
+    class DeformableMirrorService {
+        +dm_command_length
+        +add_channel(channel_name)
+        +open()
+        +main()
+        +close()
+        +monitor_channel(channel_name)
+        +update_dm()
+        #send_surface(surface) <<abstract>>
+    }
+
+    class BmcDeformableMirror {
+        +open()
+        +close()
+        +send_surface(surface)
+        +send_to_device()
+        +surface
+        +voltages
+    }
+}
+
+package "catkit2.simulator" {
+    class Simulator {
+        +time : DataStream
+        +main()
+        +add_callback(callback_func, t)
+        +remove_callback(callback)
+        +set_breakpoint(t_until)
+        +release_breakpoint(token)
+        +start_camera_acquisition(...)
+        +end_camera_acquisition(camera_name)
+        +camera_readout(camera_name, integrated_power)
+        +actuate_dm(dm_name, new_actuators)
+        +move_stage(...)
+        +switch_power(outlet_name, powered)
+        +set_source_power(source_name, power)
+    }
+
+    class Callback <<namedtuple>> {
+        +time
+        +id
+        +func
+    }
+
+    class OpticalModel {
+        +register_plane(plane, dependencies)
+        +purge_all()
+        +purge_plane(plane_name)
+        +plot_graph()
+    }
+
+    class SimpleOpticalModel {
+    }
+}
+
+' Inheritance
+BindingsService <|-- Service
+BindingsServiceProxy <|-- ServiceProxy
+BindingsTestbedProxy <|-- TestbedProxy
+
+ServiceProxy <|-- CameraProxy
+ServiceProxy <|-- DeformableMirrorProxy
+ServiceProxy <|-- OtherProxies
+
+Service <|-- CameraService
+Service <|-- DeformableMirrorService
+Service <|-- Simulator
+DeformableMirrorService <|-- BmcDeformableMirror
+
+LogObserver <|-- LogWriter
+LogObserver <|-- LogTerminal
+OpticalModel <|-- SimpleOpticalModel
+
+' Associations
+Service o-- TestbedProxy : testbed
+Service *-- CatkitLogHandler
+ServiceProxy o-- TestbedProxy : testbed
+TestbedProxy ..> ServiceProxy : creates via\nentry points
+Testbed "1" *-- "many" ServiceReference : services
+Testbed *-- "2" ZmqDistributor : log / tracing
+Experiment o-- TestbedProxy : testbed
+Experiment *-- LogWriter
+Experiment *-- LogTerminal
+Experiment ..> CatkitLogHandler
+Experiment ..> BindingsLogForwarder
+CameraService ..> StoppedAcquisition : context manager
+CameraService ..> BindingsDataStream : images, temperature
+DeformableMirrorService ..> BindingsDataStream : channels,\ntotal_voltage, total_surface
+Simulator *-- "many" Callback : callback queue
+Simulator o-- OpticalModel : used by subclasses
+
+note bottom of ServiceProxy
+  __getattr__ dynamically resolves names to
+  properties, commands or data streams
+  exposed by the remote service.
+end note
+
+note bottom of Testbed
+  Runs as the central server process.
+  Spawns each service as a separate
+  subprocess (sys.executable + script).
+end note
+
+@enduml

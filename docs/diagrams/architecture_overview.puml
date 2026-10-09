@@ -1,0 +1,65 @@
+@startuml architecture_overview
+title catkit2 - system architecture overview
+
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+node "Testbed server process" {
+    [Testbed\n(catkit2.testbed.testbed)] as TB
+    [Log ZmqDistributor] as LogDist
+    [Tracing ZmqDistributor] as TraceDist
+    [Config (YAML)] as Cfg
+}
+
+node "Service process 1 (hardware)" {
+    [Service subclass\n(e.g. CameraService)] as Svc1
+    [Server (ZMQ REP)] as Srv1
+    [DataStreams\n(images, temperature,\nheartbeat, state)] as DS1
+}
+
+node "Service process 2 (simulator)" {
+    [Simulator service] as Svc2
+    [OpticalModel] as OM
+}
+
+node "Experiment / user process" {
+    [Experiment] as Exp
+    [TestbedProxy] as TBP
+    [ServiceProxy\n(CameraProxy, DM proxy, ...)] as SP
+    [LogWriter / LogTerminal] as LogObs
+}
+
+database "Shared memory" {
+    [DataStream ring buffers\n+ Events] as SHM
+}
+
+Cfg --> TB : services, ports,\nsafety, simulation
+TB --> Svc1 : spawn subprocess\n(--id --port --testbed_port)
+TB --> Svc2 : spawn subprocess
+Svc1 --> TB : RegisterService\n+ heartbeats
+Svc2 --> TB : RegisterService
+
+Exp --> TBP : get_service(...)
+TBP --> TB : ZMQ requests\n(start/stop service, info, config)
+TBP --> SP : create proxy\n(interface from entry points)
+SP --> Srv1 : ZMQ request/reply\n(properties, commands)
+Srv1 --> Svc1 : dispatch to\nhandlers
+
+Svc1 --> SHM : SubmitFrame()
+SP --> SHM : GetFrame() /\nGetNextFrame()
+Svc2 --> SHM : simulated camera\nimages, DM state
+OM --> Svc2 : propagated wavefronts
+
+Svc1 --> LogDist : log messages\n(ingress port)
+Svc2 --> LogDist
+Exp --> LogDist : LogForwarder
+LogDist --> LogObs : egress port
+Svc1 --> TraceDist : trace events
+
+note bottom of SHM
+  Device data never travels through the
+  testbed server: it flows directly
+  between processes via shared memory.
+end note
+
+@enduml
